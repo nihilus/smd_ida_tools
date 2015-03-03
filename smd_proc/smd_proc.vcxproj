@@ -11,9 +11,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{8795B2BB-AB6F-4CCB-9B1A-CB2243E2DDD9}</ProjectGuid>
-    <RootNamespace>smd_loader</RootNamespace>
-    <ProjectName>smd_loader</ProjectName>
+    <ProjectGuid>{6A957C7F-BD00-4590-A218-203EEAC32B80}</ProjectGuid>
+    <RootNamespace>smd_proc</RootNamespace>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -32,20 +31,20 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <TargetExt>.ldw</TargetExt>
-    <OutDir>d:\ida65\loaders\</OutDir>
+    <OutDir>d:\ida65\procs\</OutDir>
+    <TargetExt>.w32</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <TargetExt>.ldw</TargetExt>
-    <OutDir>d:\ida65\loaders\</OutDir>
+    <TargetExt>.w32</TargetExt>
+    <OutDir>d:\ida65\procs\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -53,10 +52,10 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>
       </SDLCheck>
-      <PreprocessorDefinitions>__NT__;__IDP__</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>d:\idasdk66\include</AdditionalIncludeDirectories>
-      <CallingConvention>StdCall</CallingConvention>
+      <PreprocessorDefinitions>__NT__;__IDP__</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <CallingConvention>StdCall</CallingConvention>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -64,6 +63,7 @@
       <AdditionalDependencies>ida.lib</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <ImportLibrary>$(Configuration)\$(TargetName).lib</ImportLibrary>
+      <AdditionalOptions>/EXPORT:LPH </AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -74,7 +74,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>
       </SDLCheck>
-      <AdditionalIncludeDirectories>d:\idasdk66\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>d:\idasdk66\include\</AdditionalIncludeDirectories>
       <DebugInformationFormat>None</DebugInformationFormat>
       <PreprocessorDefinitions>__NT__;__IDP__</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -89,17 +89,17 @@
       <AdditionalDependencies>ida.lib</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
       <ImportLibrary>$(Configuration)\$(TargetName).lib</ImportLibrary>
+      <AdditionalOptions>/EXPORT:LPH </AdditionalOptions>
     </Link>
-    <PostBuildEvent>
-      <Command>
-      </Command>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="smd_loader.h" />
+    <ClCompile Include="ana.cpp" />
+    <ClCompile Include="ins.cpp" />
+    <ClCompile Include="reg.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="smd_loader.cpp" />
+    <ClInclude Include="ins.hpp" />
+    <ClInclude Include="m68k.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
