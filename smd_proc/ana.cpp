@@ -3,9 +3,8 @@
 //
 
 #include "m68k.hpp"
-#include <ua.hpp>
 
-enum adressingword
+enum addr_modes
 {
 	MODE_DN = 0,
 	MODE_AN,
@@ -40,399 +39,154 @@ typedef struct
 #define MODE3(W)	(((W)>>3)&7)
 #define MODE6(W)	(((W)>>6)&7)
 
-// displ flags
-#define WSIZE_SET	((1<<11))
-
-static bool get_ea_2(int mode, op_t *op, char idx)
-{
-	if (mode > MODE_IMM) return false;
-
-	if (mode == MODE_ABSW) mode += idx;
-
-	op->reg = r_a0 + idx;
-	switch (mode)
+bool idaapi can_have_type(op_t &op) {
+	switch (op.type)
 	{
-	case MODE_DN: // D0
-	{
-		op->reg = idx;
-	}
-	case MODE_AN: // A0
-	{
-		op->type = o_reg;
+	case o_void:
+		return false;
+	case o_mem:
+	case o_phrase:
+	case o_displ:
 		return true;
+	case o_reg:
+		return ((op.reg & REG_EXT_FLAG) != REG_PRE_DECR) && ((op.reg & REG_EXT_FLAG) != REG_POST_INCR);
 	}
-	case MODE_iAN: // (A0)
-	case MODE_ANp: // (A0)+
-	case MODE_pAN: // -(A0)
+	return false;
+}
+
+int idaapi is_align_insn(ea_t ea) {
+	return (get_byte(ea) == 0);
+}
+
+int idaapi is_sane_insn(int nocrefs)
+{
+	return (cmd.ip & 1);
+}
+
+//----------------------------------------------------------------------
+static bool desa_check_movep(line &d)
+{
+	uint16 val = d.w & 0170770;
+	switch (val)
 	{
-		op->type = o_phrase;
-		op->phrase = idx | (8 * mode);
-		return true;
-	}
-	case MODE_dAN: // $dddd(A0)
-	{
-		op->type = o_displ;
-		op->specflag1 = 0;
-		op->offb = (char)cmd.size;
-		op->addr = (short)ua_next_word();
-		return true;
-	}
-	case MODE_dPCXI:
-	{
-		op->reg = r_pc;
-	}
-	case MODE_dANXI: // $dd(A0,[AD]0)
-	{
-		op->type = o_displ;
-		ea_t next_ip = cmd.ip + cmd.size;
-		op->specflag2 = OF_NUMBER;
+	case 0000410:
+	case 0000510:
+		cmd.itype = (val == 0000410) ? opc_movepw : opc_movepl;
 
-		uint16 w2 = ua_next_word();
-		op->specflag1 = DISPL(w2); // displacement register
-		op->specflag1 |= ((w2 & WSIZE_SET) ? 0 : SPEC1_WSIZE);
-
-		op->offb = cmd.size - 1;
-		op->addr = (char)w2;
-
-		op->specflag2 |= ((op->addr) ? 0 : OF_NO_BASE_DISP);
-		op->flags |= (op->specflag2 & OF_NO_BASE_DISP);
-
-		if (!(op->specflag2 & OF_NO_BASE_DISP) || (op->reg == r_pc))
-		{
-			op->addr += next_ip;
-		}
-
-		return true;
-	}
-	case MODE_ABSW: // $dddd.w
-	{
-		op->type = o_mem;
-		op->specflag1 = idx;
-		op->offb = (char)cmd.size;
-		op->addr = (short)ua_next_word();
-		return true;
-	}
-	case MODE_ABSL:
-	{
-		op->addr = ua_next_long();
-		op->specflag1 = idx;
-		op->offb = (char)cmd.size;
-		op->type = o_mem;
-		return true;
-	}
-	case MODE_dPC:
-	{
-		op->addr = cmd.ip + cmd.size;
-		op->addr += (short)ua_next_word();
-		op->specflag1 = idx;
-		op->offb = (char)cmd.size;
-		op->type = o_mem;
-		return true;
-	}
-	case MODE_IMM:
-	{
-		int imm_size = 4;
-		op->type = o_imm;
-		op->specflag1 = 0;
-
-		switch (op->dtyp)
-		{
-		case dt_byte: op->value = (char)ua_next_word(); break;
-		case dt_word: op->value = (short)ua_next_word(); break;
-		case dt_dword: op->value = ua_next_long(); break;
-		default: warning("ana: %a: bad opsize %d", cmd.ip, op->dtyp); break;
-		}
-
-		return true;
-	}
-	}
-}
-
-static char set_dtype_op1_op2(char sz)
-{
-	cmd.Op2.dtyp = sz;
-	cmd.Op1.dtyp = sz;
-	return sz + 1;
-}
-
-static void exchange_Op1_Op2()
-{
-	uchar n = cmd.Op1.n;
-	ea_t addr = cmd.Op1.addr;
-	ea_t specval = cmd.Op1.specval;
-	uchar flags = cmd.Op1.flags;
-	char specflag1 = cmd.Op1.specflag1;
-	uval_t value = cmd.Op1.value;
-
-	cmd.Op1.n = cmd.Op2.n;
-	cmd.Op1.flags = cmd.Op2.flags;
-	cmd.Op1.value = cmd.Op2.value;
-	cmd.Op1.addr = cmd.Op2.addr;
-	cmd.Op1.specval = cmd.Op2.specval;
-	cmd.Op1.specflag1 = cmd.Op2.specflag1;
-
-	cmd.Op2.n = n;
-	cmd.Op2.flags = addr;
-	cmd.Op2.value = value;
-	cmd.Op2.addr = addr;
-	cmd.Op2.specval = specval;
-	cmd.Op2.specflag1 = specflag1;
-
-	cmd.Op1.n = 0;
-	cmd.Op2.n = 1;
-}
-
-static uint16 check_desa_adda_suba(line *d)
-{
-	if (d->opsz != 3) return 0;
-
-	cmd.itype = ((d->line == 0xD) ? adda : suba);
-	cmd.Op2.reg += 8;
-
-	if (d->mode6 & 4)
-	{
-		cmd.Op1.dtyp = dt_dword;
-		cmd.Op2.dtyp = dt_dword;
-		cmd.segpref = 3;
-	}
-	else
-	{
-		cmd.segpref = 2;
-	}
-
-	return (get_ea_2(d->mode3, &cmd.Op1, d->reg0) ? cmd.size : 0);
-}
-
-static uint16 check_desa_addx_subx(line *d)
-{
-	if (d->mode6 < 4 && d->mode3 > 1) return 0;
-
-	cmd.itype = ((d->line == 0xD) ? addx : subx);
-	cmd.Op1.reg = d->reg0;
-	cmd.Op1.type = o_reg;
-	return cmd.size;
-}
-
-static uint16 check_desa_add_sub(line *d)
-{
-	if (!get_ea_2(d->mode3, &cmd.Op1, d->reg0)) return 0;
-	if (!(d->mode6 & 4)) return cmd.size;
-
-	exchange_Op1_Op2();
-	return cmd.size;
-}
-
-static uint16 check_desa_abcd_sbcd(line *d)
-{
-	if (d->mode6 != 4) return 0;
-
-	cmd.itype = ((d->line == 0xC) ? abcd : sbcd);
-	cmd.Op2.dtyp = dt_byte;
-	cmd.Op1.dtyp = dt_byte;
-
-	cmd.Op1.reg = d->reg0;
-	cmd.Op1.type = o_reg;
-	return cmd.size;
-}
-
-static uint16 check_desa_mul_div(line *d)
-{
-	if (d->opsz != 3 || d->mode3 == 1) return 0;
-
-	cmd.itype = (((d->line == 0xC) ? mulu : divu) - ((d->w & 0x100) ? 1 : 0));
-	return (get_ea_2(d->mode3, &cmd.Op1, d->reg0) ? cmd.size : 0);
-}
-
-static uint16 check_desa_exg(line *d)
-{
-	cmd.itype = exg;
-	cmd.Op1.type = o_reg;
-	cmd.Op2.reg = d->reg0;
-	cmd.Op1.reg = d->reg9;
-	cmd.Op2.dtyp = dt_dword;
-	cmd.Op1.dtyp = dt_dword;
-
-	if (d->mode3)
-	{
-		cmd.Op2.reg += 8;
-
-		if (d->mode6 == 5)
-		{
-			cmd.Op1.reg += 8;
-			return cmd.size;
-		}
-		return ((d->mode6 == 6) ? cmd.size : 0);
-	}
-	else return ((d->mode6 == 5) ? cmd.size : 0);
-}
-
-static uint16 check_desa_and_or(line *d)
-{
-	if (d->mode6 >= 4 || d->mode3 <= 1) return 0;
-	
-	cmd.itype = ((d->line == 0xC) ? and : or);
-	set_dtype_op1_op2(d->opsz);
-
-	if (!get_ea_2(d->mode3, &cmd.Op1, d->reg0)) return 0;
-	if (!(d->mode6 & 4)) return cmd.size;
-
-	exchange_Op1_Op2();
-	return cmd.size;
-}
-
-static uint16 check_desa_cmpa(line *d)
-{
-	if (d->opsz != 3) return 0;
-
-	cmd.itype = cmpa;
-	cmd.Op2.reg += 8;
-
-	if (d->mode6 & 4)
-	{
-		cmd.Op1.dtyp = dt_dword;
-		cmd.Op2.dtyp = dt_dword;
-		cmd.segpref = 3;
-	}
-	else cmd.segpref = 2;
-
-	return (get_ea_2(d->mode3, &cmd.Op1, d->reg0) ? cmd.size : 0);
-}
-
-static uint16 check_desa_eor_cmp(line *d)
-{
-	if (d->opsz == 3) return 0;
-
-	cmd.itype = ((d->w & 0x100) ? eor : cmp);
-	return (get_ea_2(d->mode3, &cmd.Op2, d->reg0) ? cmd.size : 0);
-}
-
-static uint16 desa_lineB(line *d)
-{
-	cmd.Op2.type = o_reg;
-	cmd.Op2.reg = d->reg9;
-	
-	uint16 cmpa_retn = check_desa_cmpa(d);
-	if (cmpa_retn) return cmpa_retn;
-
-	set_dtype_op1_op2(d->opsz);
-
-	uint16 eor_cmp = check_desa_eor_cmp(d);
-	if (eor_cmp) return eor_cmp;
-}
-
-/**************
-*
-*   LINE 8 :
-*   -OR
-*   -SBCD
-*   -DIVU
-*
-*
-*   LINE C :
-*   -EXG
-*   -MULS,MULU
-*   -ABCD
-*   -AND
-*
-***************/
-
-static uint16 desa_line8C(line *d)
-{
-	cmd.Op2.type = o_reg;
-	cmd.Op2.reg = d->reg9;
-
-	uint16 abcd_sbcd = check_desa_abcd_sbcd(d);
-	if (abcd_sbcd) return abcd_sbcd;
-
-	uint16 mul_div = check_desa_mul_div(d);
-	if (mul_div) return mul_div;
-
-	uint16 exg_retn = check_desa_exg(d);
-	if (exg_retn) return exg_retn;
-
-	uint16 and_or = check_desa_and_or(d);
-	if (and_or) return and_or;
-
-	return 0;
-}
-
-/**************
-*
-*   LINE 9 :
-*   -SUB, SUBX, SUBA
-*
-*   LINE D :
-*   -ADD, ADDX, ADDA
-*
-**************/
-
-static uint16 desa_line9D(line *d)
-{
-	cmd.Op2.type = o_reg;
-	cmd.Op2.reg = d->reg9;
-
-	uint16 adda_suba = check_desa_adda_suba(d);
-	if (adda_suba) return adda_suba;
-
-	set_dtype_op1_op2(d->opsz);
-
-	uint16 addx_subx = check_desa_addx_subx(d);
-	if (addx_subx) return addx_subx;
-
-	uint16 add_sub = check_desa_add_sub(d);
-	if (add_sub) return add_sub;
-
-	return 0;
-}
-
-/**************
-*
-*   LINE E :
-*   -Shifting
-*
-* Format Reg: 1110 VAL D SZ I TY RG0
-* Format Mem: 1110 0TY D 11 MODRG0
-***************/
-
-static uint16 desa_lineE(line *d)
-{
-	static const m68k_opcodes shift_instr[] = { asr, lsr, roxr, ror, asl, lsl, roxl, rol };
-	
-	char shift_reg;
-
-	if (d->opsz == 3){
-		if ((d->mode3 <= MODE_AN) || (d->mode3 == MODE_ABSW && d->reg0 > 1 /*dPC, dPCXI, IMM*/) || !get_ea_2(d->mode3, &cmd.Op1, d->reg0)) return false;
-
-		shift_reg = (char)d->reg9;
-	}
-	else
-	{
-		set_dtype_op1_op2(d->opsz);
-		cmd.Op2.reg = d->reg0;
+		cmd.Op1.type = o_displ;
 		cmd.Op2.type = o_reg;
 
-		if (d->mode3 & 4 /*pAN, dAN, dANXI, ABSW*/)
-		{
-			cmd.Op1.type = o_reg;
-			cmd.Op1.reg = d->reg9;
-		}
-		else
-		{
-			cmd.Op1.type = o_imm;
-			cmd.Op1.value = ((d->reg9) ? d->reg9 : 8);
-			cmd.Op1.flags |= OF_NUMBER;
-			cmd.Op1.specflag1 = 4;
-		}
-		shift_reg = (d->mode3 & 3);
+		cmd.Op1.specflag1 = 0;
+		cmd.Op2.specflag1 = 0;
+
+		cmd.Op1.offb = (char)cmd.size;
+		cmd.Op2.offb = (char)cmd.size;
+
+		cmd.Op1.phrase = r_a0 + d.reg0;
+		cmd.Op2.reg = r_d0 + d.reg9;
+
+		cmd.Op1.addr = (short)ua_next_word();
+
+		return true;
+
+	case 0000610:
+	case 0000710:
+		cmd.itype = (val == 0000610) ? opc_movepw : opc_movepl;
+
+		cmd.Op2.type = o_displ;
+		cmd.Op1.type = o_reg;
+
+		cmd.Op2.specflag1 = 0;
+		cmd.Op1.specflag1 = 0;
+
+		cmd.Op2.offb = (char)cmd.size;
+		cmd.Op1.offb = (char)cmd.size;
+
+		cmd.Op2.phrase = r_a0 + d.reg0;
+		cmd.Op1.reg = r_d0 + d.reg9;
+
+		cmd.Op2.addr = (short)ua_next_word();
+
+		return true;
 	}
-	cmd.itype = shift_instr[shift_reg | (d->mode6 & 4)];
-	return cmd.size;
+
+	return false;
+}
+
+static bool desa_check_bitop(line &d)
+{
+	uint16 val = d.w & 0170700;
+	switch (val)
+	{
+	case 0000400:
+	case 0000500:
+	case 0000600:
+	case 0000700:
+		cmd.Op1.type = o_reg;
+		cmd.Op1.reg = r_d0 + d.reg9;
+
+		switch (val)
+		{
+		case 0000400:
+			cmd.itype = opc_btst;
+		case 0000500:
+			cmd.itype = opc_bchg;
+		case 0000600:
+			cmd.itype = opc_bclr;
+		case 0000700:
+			cmd.itype = opc_bset;
+		}
+
+		break;
+	default:
+		return false;
+	}
+
+	val = d.w & 0177700;
+	switch (val)
+	{
+	case 0004000:
+		cmd.itype = opc_btst;
+		break;
+	case 0004100:
+		cmd.itype = opc_bchg;
+		break;
+	case 0004200:
+		cmd.itype = opc_bclr;
+		break;
+	case 0004300:
+		cmd.itype = opc_bset;
+		break;
+	default:
+		return false;
+	}
+
+	/*
+	*{"btst", 2,	one(0000400),	one(0170700), "Dd;b", m68000up | mcfisa_a },
+	{"btst", 4,	one(0004000),	one(0177700), "#b@s", m68000up },
+	*
+	*{"bchg", 2,	one(0000500),	one(0170700), "Dd$s", m68000up | mcfisa_a },
+	{"bchg", 4,	one(0004100),	one(0177700), "#b$s", m68000up },
+	*
+	*{"bclr", 2,	one(0000600),	one(0170700), "Dd$s", m68000up | mcfisa_a },
+	{"bclr", 4,	one(0004200),	one(0177700), "#b$s", m68000up },
+	*
+	*{"bset", 2,	one(0000700),	one(0170700), "Dd$s", m68000up | mcfisa_a },
+	{"bset", 4,	one(0004300),	one(0177700), "#b$s", m68000up },
+	*
+	*/
+}
+
+static uint16 desa_line0(line &d)
+{
+	if (desa_check_movep(d))
+		return cmd.size;
+
+	return 0;
 }
 
 //----------------------------------------------------------------------
 int idaapi ana(void) {
-	if (cmd.ip & 1) return 0;
-
 	cmd.Op1.dtyp = dt_word;
 	cmd.Op2.dtyp = dt_word;
 	cmd.Op3.dtyp = dt_word;
@@ -448,12 +202,8 @@ int idaapi ana(void) {
 
 	switch (d.line)
 	{
-	case 0xB: return desa_lineB(&d);
-	case 0x8:
-	case 0xC: return desa_line8C(&d);
-	case 0x9:
-	case 0xD: return desa_line9D(&d);
-	case 0xE: return desa_lineE(&d);
+	case 0x0:
+		return desa_line0(d);
 	}
 
 	return 0;
